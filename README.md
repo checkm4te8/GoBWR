@@ -27,6 +27,12 @@ GoBWR is my attempt to create a realistic, fully working physics simulation of a
 
 This project is currently in early development and is not intended for public usage yet. Information on running it will be published once some decent progress is made.
 
+<!-- RESOURCES -->
+## Resources
+
+GoBWR is being developed with the help of the following resources by the following authors:
+* [Simplified reactor physics for RBWR style games](https://archive.org/details/rbwr-reactor-physics) by Delfino Delphis.
+
 <!-- LICENSE -->
 ## License
 
