@@ -25,3 +25,7 @@ func CalculateDensity(Temperature float64, Pressure float64) float64 {
 	var specificVolumeM3kg = C.pt(C.double(PressureMPa), C.double(Temperature), SPECIFIC_VOLUME)
 	return 1.0 / float64(specificVolumeM3kg) // density = 1/specific_volume
 }
+
+func CalculateMass(Volume float64, Density float64) (Mass float64) {
+	return Density * Volume //kg
+}

@@ -16,6 +16,8 @@ func main() {
 	reactor.SetupReactor()
 	for {
 		reactor.SimulateFission()
+		fmt.Println(fluid.FluidNodes)
+		fmt.Println(fluid.GetReactorWaterLevel())
 		fmt.Println(reactor.CalculateThermalPower())
 		time.Sleep(eventLoopFrequency) // Execute the main event loop every eventLoopFrequency seconds.
 	}

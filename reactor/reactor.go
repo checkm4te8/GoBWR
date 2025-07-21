@@ -15,6 +15,7 @@ type Reactor struct {
 	RodsPulled float64
 }
 
+// --- STRUCT INITIALIZATIONS ---
 var ReactorState Reactor
 
 func SetupReactor() {

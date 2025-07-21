@@ -7,51 +7,40 @@ type FluidNode struct {
 	Volume      float64 // volume of the fluid node in cubic meters
 	Mass        float64 // total mass of the fluid in kg
 	Enthalpy    float64 // J/kg
+	MaxVolume   float64 // max volume in cubic metres. Fluid will not flow into the node if it is full.
 }
 
 // --- CONSTANT DECLARATIONS ---
+const RPVHeight float32 = 21.3 // In meters, how high the water can fill in the RPV
 
 // --- VARIABLE DECLARATIONS ---
 var FluidNodes map[string]FluidNode = map[string]FluidNode{
 	"FeedwaterHeader": FluidNode{
-		20, 101325, 10, 0, 0, // Enthalpy is calculated by IAPWS IF97 upon initialization.
+		20, 101325, 10, 0, 0, 999999, // Enthalpy is calculated by IAPWS IF97 upon initialization. Mass is calculated upon initialization as well.
 	},
-	"Downcomer": FluidNode{
-		25, 200000, 50, 50000, 0,
-	},
-	"LowerPlenum": FluidNode{
-		30, 250000, 20, 20000, 0,
-	},
-	"CoreBottom": FluidNode{
-		35, 240000, 15, 15000, 0,
-	},
-	"CoreMiddle": FluidNode{
-		40, 230000, 15, 15000, 0,
-	},
-	"CoreTop": FluidNode{
-		45, 220000, 15, 15000, 0,
+	"ReactorVessel": FluidNode{
+		35, 230000, 623, 0, 0, 928,
 	},
 	"SteamDome": FluidNode{
-		50, 200000, 100, 5000, 0,
+		50, 200000, 100, 0, 0, 999999,
 	},
 }
 
 var FlowRates map[string]float64 = map[string]float64{
-	"FeedwaterHeader->Downcomer": 0.0,
-	"Downcomer->LowerPlenum":     0.0,
-	"LowerPlenum->CoreBottom":    0.0,
-	"CoreBottom->CoreMiddle":     0.0,
-	"CoreMiddle->CoreTop":        0.0,
-	"CoreTop->SteamDome":         0.0,
+	"FeedwaterHeader->ReactorVessel": 0.0,
 }
 
 func InitializeFluidNodes() {
 	for name, node := range FluidNodes {
 		node.Enthalpy = CalculateEnthalpy(node.Temperature, node.Pressure)
+		node.Mass = CalculateMass(node.Volume, CalculateDensity(node.Temperature, node.Pressure))
 		FluidNodes[name] = node
 	}
 }
 
-func GetNodeDensity(InputNode FluidNode) float64 {
-	return CalculateDensity(InputNode.Temperature, InputNode.Pressure)
+func GetReactorWaterLevel() float64 {
+	var RPVNode FluidNode = FluidNodes["ReactorVessel"]
+	var density float64 = CalculateDensity(RPVNode.Temperature, RPVNode.Pressure)
+	var currentWaterVolume float64 = RPVNode.Mass / density
+	return (currentWaterVolume / RPVNode.MaxVolume) * float64(RPVHeight)
 }
