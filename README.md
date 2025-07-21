@@ -32,6 +32,8 @@ This project is currently in early development and is not intended for public us
 
 GoBWR is being developed with the help of the following resources by the following authors:
 * [Simplified reactor physics for RBWR style games](https://archive.org/details/rbwr-reactor-physics) by Delfino Delphis.
+* [SEUIF97, a high-speed IAPWS-IF97 implementation in C](https://github.com/thermalogic/SEUIF97) by thermalogic (Distributed under the MIT license).
+
 
 <!-- LICENSE -->
 ## License

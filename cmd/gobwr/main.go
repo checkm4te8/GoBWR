@@ -1,6 +1,7 @@
 package main
 
 import (
+	"GoBWR/fluid"
 	"GoBWR/reactor"
 	"fmt"
 	"time"
@@ -11,7 +12,10 @@ const eventLoopFrequency time.Duration = 1 * time.Second // How often the physic
 
 // --- MAIN EVENT LOOP ---
 func main() {
+	fluid.InitializeFluidNodes()
+	reactor.SetupReactor()
 	for {
+		reactor.SimulateFission()
 		fmt.Println(reactor.CalculateThermalPower())
 		time.Sleep(eventLoopFrequency) // Execute the main event loop every eventLoopFrequency seconds.
 	}
