@@ -1,10 +1,11 @@
 package main
 
 import (
-	"GoBWR/fluid"
-	"GoBWR/reactor"
 	"fmt"
 	"time"
+
+	"github.com/checkm4te8/gobwr/fluid"
+	"github.com/checkm4te8/gobwr/reactor"
 )
 
 // --- CONSTANT DECLARATIONS ---
@@ -12,13 +13,14 @@ const eventLoopFrequency time.Duration = 1 * time.Second // How often the physic
 
 // --- MAIN EVENT LOOP ---
 func main() {
-	fluid.InitializeFluidNodes()
-	reactor.SetupReactor()
+	nodes := fluid.Init()
+	state := reactor.Init()
+
 	for {
-		reactor.SimulateFission()
-		fmt.Println(fluid.FluidNodes)
-		fmt.Println(fluid.GetReactorWaterLevel())
-		fmt.Println(reactor.CalculateThermalPower())
+		reactor.SimulateFission(&state)
+		fmt.Println(nodes)
+		fmt.Println(fluid.GetReactorWaterLevel(nodes))
+		fmt.Println(reactor.CalculateThermalPower(state.CurrentNeutrons))
 		time.Sleep(eventLoopFrequency) // Execute the main event loop every eventLoopFrequency seconds.
 	}
 }
