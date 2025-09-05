@@ -153,56 +153,88 @@ func InitializeFluidNodes() {
 	}
 }
 
+func CalculateTotalPipeKAndVelocityMap(flowPath FlowPath, kPipeMap map[string]float64, pressureMagnitude float64, sourceNodeDensity float64) (normalizedTotalK float64, pipeVelocityMap map[string]float64) {
+	pipeVelocityMap = make(map[string]float64)
+	var firstIteration bool = true // get the first pipe of the path to use as a reference for total K-factor
+	var firstPipe FluidPipe
+	for _, pipeId := range flowPath.JunctionIDs { // calculate total normalized K-Factor
+		if firstIteration {
+			normalizedTotalK += kPipeMap[pipeId]
+			firstPipe = FluidPipes[pipeId]
+			firstIteration = false
+			continue
+		}
+		var firstPipeA float64 = math.Pi * math.Pow((firstPipe.PipeDiameter/1000)/2, 2) // cross-sectional area of first and current pipe
+		var currentPipeA float64 = math.Pi * math.Pow((FluidPipes[pipeId].PipeDiameter/1000)/2, 2)
+		normalizedTotalK += kPipeMap[pipeId] * math.Pow(firstPipeA/currentPipeA, 2)
+	}
+
+	var firstPipeVelocity float64 = math.Sqrt(2 * pressureMagnitude / (normalizedTotalK * sourceNodeDensity))
+	for _, pipeId := range flowPath.JunctionIDs { // get velocity in all pipes
+		var firstPipeA float64 = math.Pi * math.Pow((firstPipe.PipeDiameter/1000)/2, 2) // cross-sectional area of first and current pipe
+		var currentPipeA float64 = math.Pi * math.Pow((FluidPipes[pipeId].PipeDiameter/1000)/2, 2)
+		var currentPipeVelocity float64 = firstPipeVelocity * (firstPipeA / currentPipeA) // principle of continuity to derive current pipe velocity from the first (reference) pipe
+		pipeVelocityMap[pipeId] = currentPipeVelocity
+	}
+	return
+}
+
+func CalculateKPipeMapAndFrictionFactorMap(flowPath FlowPath, previousFrictionFactors map[string]float64, pressureMagnitude float64, sourceNode FluidNode) (kPipeMap map[string]float64, pipeFrictionFactorMap map[string]float64) {
+	kPipeMap = make(map[string]float64)
+	var sourceNodeDensity = CalculateDensity(sourceNode.Temperature, sourceNode.Pressure)
+	for _, pipeId := range flowPath.JunctionIDs { // populate kPipeMap
+		kPipeMap[pipeId] = (previousFrictionFactors[pipeId] * (FluidPipes[pipeId].PipeLength) / (FluidPipes[pipeId].PipeDiameter / 1000)) + FluidPipes[pipeId].MinorKFactor // diameter unit conversion mm->m
+	}
+
+	var _, pipeVelocityMap = CalculateTotalPipeKAndVelocityMap(flowPath, kPipeMap, pressureMagnitude, sourceNodeDensity)
+
+	pipeFrictionFactorMap = make(map[string]float64)
+	for _, pipeId := range flowPath.JunctionIDs { // get a better friction factor estimate
+		var reynoldsNumber float64 = (sourceNodeDensity * pipeVelocityMap[pipeId] * (FluidPipes[pipeId].PipeDiameter / 1000)) / CalculateDynamicViscosity(sourceNode.Temperature, sourceNode.Pressure)
+		var pipeAbsoluteRoughness float64 = 0.000045 // meters, this is an estimate
+		var swameeJainFrictionFactor float64 = 0.25 / math.Pow(math.Log10((pipeAbsoluteRoughness/(3.7*(FluidPipes[pipeId].PipeDiameter/1000)))+(5.74/math.Pow(reynoldsNumber, 0.9))), 2)
+		pipeFrictionFactorMap[pipeId] = swameeJainFrictionFactor
+	}
+	return
+}
+
 func SimulateFlow() {
 	for _, flowPath := range FlowPaths {
 		fmt.Println(flowPath)
 		var sourceNode FluidNode = FluidNodes[flowPath.SourceNodeID]
 		var destinationNode FluidNode = FluidNodes[flowPath.DestinationNodeID]
-		var sourceNodeDensity float64 = CalculateDensity(sourceNode.Temperature, sourceNode.Pressure)
 		var deltaP float64 = sourceNode.Pressure - destinationNode.Pressure // positive means flow from source to destination, 0 means no flow, negative means flow from destination to source
 		var pressureMagnitude float64 = math.Abs(deltaP)
-		var fGuess float64 = 0.02 // find the darcy friction factor using an interative loop to get the major K-Factor
-		var kPipeMap map[string]float64 = make(map[string]float64)
-
-		for _, pipeId := range flowPath.JunctionIDs { // populate kPipeMap
-			kPipeMap[pipeId] = (fGuess * (FluidPipes[pipeId].PipeLength) / (FluidPipes[pipeId].PipeDiameter / 1000)) + FluidPipes[pipeId].MinorKFactor // diameter unit conversion mm->m
+		var fGuessMap map[string]float64 = make(map[string]float64) // find the darcy friction factor using an interative loop to get the major K-Factor
+		for _, pipeName := range flowPath.JunctionIDs {
+			fGuessMap[pipeName] = 0.02
 		}
-
-		var normalizedTotalK float64 = 0.0
-		var firstIteration bool = true // get the first pipe of the path to use as a reference for total K-factor
+		var pipeFrictionFactorMap map[string]float64 = make(map[string]float64)
+		_, pipeFrictionFactorMap = CalculateKPipeMapAndFrictionFactorMap(flowPath, fGuessMap, pressureMagnitude, sourceNode)
+		for i := 0; i < 2; i += 1 { // 3 iterative recalculations for higher accuracy
+			_, pipeFrictionFactorMap = CalculateKPipeMapAndFrictionFactorMap(flowPath, pipeFrictionFactorMap, pressureMagnitude, sourceNode)
+		}
+		var kMap, _ = CalculateKPipeMapAndFrictionFactorMap(flowPath, pipeFrictionFactorMap, pressureMagnitude, sourceNode)
+		var totalFinalK float64 = 0.0
+		var firstIteration bool = true
 		var firstPipe FluidPipe
-		for _, pipeId := range flowPath.JunctionIDs { // calculate total normalized K-Factor
+		for _, pipeId := range flowPath.JunctionIDs {
 			if firstIteration {
-				normalizedTotalK += kPipeMap[pipeId]
+				totalFinalK += kMap[pipeId]
 				firstPipe = FluidPipes[pipeId]
 				firstIteration = false
+				fmt.Println("first " + pipeId + " is")
+				fmt.Println(kMap[pipeId])
 				continue
 			}
 			var firstPipeA float64 = math.Pi * math.Pow((firstPipe.PipeDiameter/1000)/2, 2) // cross-sectional area of first and current pipe
 			var currentPipeA float64 = math.Pi * math.Pow((FluidPipes[pipeId].PipeDiameter/1000)/2, 2)
-			normalizedTotalK += kPipeMap[pipeId] * math.Pow(firstPipeA/currentPipeA, 2)
+			var normalizedK float64 = kMap[pipeId] * math.Pow(firstPipeA/currentPipeA, 2)
+			totalFinalK += normalizedK
+			fmt.Println(pipeId + " is")
+			fmt.Println(kMap[pipeId])
 		}
-
-		var firstPipeVelocity float64 = math.Sqrt(2 * pressureMagnitude / (normalizedTotalK * sourceNodeDensity))
-		var pipeVelocityMap map[string]float64 = make(map[string]float64)
-		for _, pipeId := range flowPath.JunctionIDs { // get velocity in all pipes
-			var firstPipeA float64 = math.Pi * math.Pow((firstPipe.PipeDiameter/1000)/2, 2) // cross-sectional area of first and current pipe
-			var currentPipeA float64 = math.Pi * math.Pow((FluidPipes[pipeId].PipeDiameter/1000)/2, 2)
-			var currentPipeVelocity float64 = firstPipeVelocity * (firstPipeA / currentPipeA) // principle of continuity to derive current pipe velocity from the first (reference) pipe
-			pipeVelocityMap[pipeId] = currentPipeVelocity
-		}
-
-		var pipeFrictionFactorMap map[string]float64 = make(map[string]float64)
-		for _, pipeId := range flowPath.JunctionIDs { // get a better friction factor estimate
-			var reynoldsNumber float64 = (sourceNodeDensity * pipeVelocityMap[pipeId] * (FluidPipes[pipeId].PipeDiameter / 1000)) / CalculateDynamicViscosity(sourceNode.Temperature, sourceNode.Pressure)
-			var pipeAbsoluteRoughness float64 = 0.000045 // meters, this is an estimate
-			var swameeJainFrictionFactor float64 = 0.25 / math.Pow(math.Log10((pipeAbsoluteRoughness/(3.7*(FluidPipes[pipeId].PipeDiameter/1000)))+(5.74/math.Pow(reynoldsNumber, 0.9))), 2)
-			pipeFrictionFactorMap[pipeId] = swameeJainFrictionFactor
-		}
-
-		fmt.Println(pipeVelocityMap)
-		fmt.Println(pipeFrictionFactorMap)
-		fmt.Println(kPipeMap)
+		fmt.Println(totalFinalK)
 	}
 }
 
