@@ -2,9 +2,10 @@ package fluid
 
 // Property codes from SEUIF97
 const (
-	SPECIFIC_VOLUME = 3
-	ENTHALPY        = 4
-	ENTROPY         = 5
+	SPECIFIC_VOLUME   = 3
+	ENTHALPY          = 4
+	ENTROPY           = 5
+	DYNAMIC_VISCOSITY = 24
 )
 
 func CalculateEnthalpy(Temperature float64, Pressure float64) (Enthalpy float64) {
@@ -21,4 +22,10 @@ func CalculateDensity(Temperature float64, Pressure float64) float64 {
 
 func CalculateMass(Volume float64, Density float64) (Mass float64) {
 	return Density * Volume //kg
+}
+
+func CalculateDynamicViscosity(Temperature float64, Pressure float64) float64 {
+	var PressureMPa float64 = Pressure / 1000000
+	var viscosity float64 = cgoPt(PressureMPa, Temperature, DYNAMIC_VISCOSITY)
+	return viscosity
 }
