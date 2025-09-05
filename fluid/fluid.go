@@ -1,6 +1,7 @@
 package fluid
 
 import (
+	"errors"
 	"fmt"
 	"math"
 )
@@ -70,7 +71,7 @@ var FluidPipes map[string]FluidPipe = map[string]FluidPipe{
 			"Junction",
 			"HotwellToTest2",
 			"Node",
-			"Hotwell",
+			"ReactorVessel",
 		},
 		50,
 		50,
@@ -78,28 +79,49 @@ var FluidPipes map[string]FluidPipe = map[string]FluidPipe{
 	},
 }
 
-func GetConnection(initialJunctionId string) {
-	for pipeName, pipe := range FluidPipes {
-		if pipe.JunctionBase.SourceType == "Junction" && pipe.JunctionBase.SourceID == initialJunctionId {
-			fmt.Println(pipeName + " connects to " + pipe.JunctionBase.SourceID)
-			if pipe.JunctionBase.DestinationType == "Junction" {
-				// there's more connections, continue
-				GetConnection(pipeName)
-			} else {
-				fmt.Println(pipeName + " ends connection chain at node " + pipe.JunctionBase.DestinationID)
-			}
+func FindConnectionToJunction(junctionId string) (nextType string, nextId string, searchError error) {
+	var junction FluidPipe
+	var ok bool
+	junction, ok = FluidPipes[junctionId]
+
+	if !ok {
+		return "", "", errors.New("junction not found")
+	}
+
+	if junction.JunctionBase.DestinationType == "Junction" {
+		var ok bool
+		_, ok = FluidPipes[junction.JunctionBase.DestinationID]
+		if !ok {
+			return "", "", errors.New("destination junction does not exist")
 		}
 	}
+
+	if junction.JunctionBase.DestinationType == "Node" {
+		var ok bool
+		_, ok = FluidNodes[junction.JunctionBase.DestinationID]
+		if !ok {
+			return "", "", errors.New("destination node does not exist")
+		}
+	}
+
+	return junction.JunctionBase.DestinationType, junction.JunctionBase.DestinationID, nil
 }
 
-func BuildNodeFlowTree() { // Start from node, find the first junction that the node is a source to, and continue looping through all junctions until arrive at a node.
-	for name, _ := range FluidNodes {
-		for pipeName, pipe := range FluidPipes {
-			if pipe.JunctionBase.SourceType == "Node" && pipe.JunctionBase.SourceID == name {
-				GetConnection(pipeName)
-			}
+func GetJunctionPathToDestination(startJunctionId string) (junctionPath []string, destinationNodeId string, err error) {
+	var currentJunctionId string = startJunctionId
+	junctionPath = append(junctionPath, currentJunctionId)
+	for true {
+		nextStepType, nextStepId, searchError := FindConnectionToJunction(currentJunctionId)
+		if searchError != nil {
+			return junctionPath, currentJunctionId, searchError
 		}
+		if nextStepType == "Node" {
+			return junctionPath, nextStepId, nil
+		}
+		junctionPath = append(junctionPath, nextStepId)
+		currentJunctionId = nextStepId
 	}
+	return junctionPath, currentJunctionId, nil
 }
 
 func InitializeFluidNodes() {
@@ -108,7 +130,8 @@ func InitializeFluidNodes() {
 		node.Mass = CalculateMass(node.Volume, CalculateDensity(node.Temperature, node.Pressure))
 		FluidNodes[name] = node
 	}
-	BuildNodeFlowTree()
+	//BuildNodeFlowTrees()
+	fmt.Println(GetJunctionPathToDestination("HotwellToTest"))
 }
 
 func GetReactorWaterLevel() float64 {
