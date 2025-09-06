@@ -2,8 +2,8 @@ package fluid
 
 import (
 	"errors"
-	"fmt"
 	"math"
+	"time"
 )
 
 // --- STRUCT DECLARATIONS ---
@@ -14,6 +14,7 @@ type FluidNode struct {
 	Mass        float64 // total mass of the fluid in kg
 	Enthalpy    float64 // J/kg
 	MaxVolume   float64 // max volume in cubic metres. Fluid will not flow into the node if it is full.
+	NodeType    string  // ConstantPressure or RigidVessel
 }
 
 type FluidJunctionBase struct {
@@ -42,10 +43,10 @@ const RPVHeight float32 = 21.3 // In meters, how high the water can fill in the 
 // --- VARIABLE DECLARATIONS ---
 var FluidNodes map[string]FluidNode = map[string]FluidNode{
 	"Hotwell": FluidNode{
-		20, 101325, math.Inf(1), 0, 0, math.Inf(1), // Enthalpy is calculated by IAPWS IF97 upon initialization. Mass is calculated upon initialization as well.
+		20, 101325, 10000, 0, 0, 11000, "ConstantPressure", // Enthalpy is calculated by IAPWS IF97 upon initialization. Mass is calculated upon initialization as well.
 	},
 	"ReactorVessel": FluidNode{
-		35, 230000, 623, 0, 0, 928,
+		35, 230000, 623, 0, 0, 928, "RigidVessel",
 	},
 }
 
@@ -133,8 +134,8 @@ func GetJunctionPathToDestination(startJunctionId string) (junctionPath []string
 
 func InitializeFluidNodes() {
 	for name, node := range FluidNodes { // Initialize Enthalpy and Mass of all nodes
-		node.Enthalpy = CalculateEnthalpy(node.Temperature, node.Pressure)
-		node.Mass = CalculateMass(node.Volume, CalculateDensity(node.Temperature, node.Pressure))
+		node.Enthalpy = CalculateEnthalpyPt(node.Pressure/1000000, node.Temperature) * 1000 // J/kg
+		node.Mass = CalculateMass(CalculateDensityPt(node.Pressure/1000000, node.Temperature), node.Volume)
 		FluidNodes[name] = node
 	}
 
@@ -181,7 +182,7 @@ func CalculateTotalPipeKAndVelocityMap(flowPath FlowPath, kPipeMap map[string]fl
 
 func CalculateKPipeMapAndFrictionFactorMap(flowPath FlowPath, previousFrictionFactors map[string]float64, pressureMagnitude float64, sourceNode FluidNode) (kPipeMap map[string]float64, pipeFrictionFactorMap map[string]float64) {
 	kPipeMap = make(map[string]float64)
-	var sourceNodeDensity = CalculateDensity(sourceNode.Temperature, sourceNode.Pressure)
+	var sourceNodeDensity = CalculateDensityPt(sourceNode.Pressure/1000000, sourceNode.Temperature)
 	for _, pipeId := range flowPath.JunctionIDs { // populate kPipeMap
 		kPipeMap[pipeId] = (previousFrictionFactors[pipeId] * (FluidPipes[pipeId].PipeLength) / (FluidPipes[pipeId].PipeDiameter / 1000)) + FluidPipes[pipeId].MinorKFactor // diameter unit conversion mm->m
 	}
@@ -190,7 +191,7 @@ func CalculateKPipeMapAndFrictionFactorMap(flowPath FlowPath, previousFrictionFa
 
 	pipeFrictionFactorMap = make(map[string]float64)
 	for _, pipeId := range flowPath.JunctionIDs { // get a better friction factor estimate
-		var reynoldsNumber float64 = (sourceNodeDensity * pipeVelocityMap[pipeId] * (FluidPipes[pipeId].PipeDiameter / 1000)) / CalculateDynamicViscosity(sourceNode.Temperature, sourceNode.Pressure)
+		var reynoldsNumber float64 = (sourceNodeDensity * pipeVelocityMap[pipeId] * (FluidPipes[pipeId].PipeDiameter / 1000)) / CalculateDynamicViscosityPt(sourceNode.Pressure/1000000, sourceNode.Temperature)
 		var pipeAbsoluteRoughness float64 = 0.000045 // meters, this is an estimate
 		var swameeJainFrictionFactor float64 = 0.25 / math.Pow(math.Log10((pipeAbsoluteRoughness/(3.7*(FluidPipes[pipeId].PipeDiameter/1000)))+(5.74/math.Pow(reynoldsNumber, 0.9))), 2)
 		pipeFrictionFactorMap[pipeId] = swameeJainFrictionFactor
@@ -198,23 +199,36 @@ func CalculateKPipeMapAndFrictionFactorMap(flowPath FlowPath, previousFrictionFa
 	return
 }
 
-func SimulateFlow() {
+func SimulateFlow(deltaTime time.Duration) {
+	var deltaTimeSeconds float64 = deltaTime.Seconds() // convert time.Duration to seconds
 	for _, flowPath := range FlowPaths {
-		fmt.Println(flowPath)
 		var sourceNode FluidNode = FluidNodes[flowPath.SourceNodeID]
 		var destinationNode FluidNode = FluidNodes[flowPath.DestinationNodeID]
+		var actualSourceNode FluidNode = sourceNode
+		var actualSourceNodeId string = flowPath.SourceNodeID
+		var actualDestinationNode FluidNode = destinationNode
+		var actualDestinationNodeId string = flowPath.DestinationNodeID
 		var deltaP float64 = sourceNode.Pressure - destinationNode.Pressure // positive means flow from source to destination, 0 means no flow, negative means flow from destination to source
+		if deltaP == 0 {
+			continue // skip this path, pressure is equalized, no flow
+		} else if deltaP < 0.0 {
+			actualSourceNode = destinationNode
+			actualSourceNodeId = flowPath.DestinationNodeID
+			actualDestinationNode = sourceNode
+			actualDestinationNodeId = flowPath.SourceNodeID
+		}
+		var sourceNodeDensity float64 = CalculateDensityPt(actualSourceNode.Pressure/1000000, actualSourceNode.Temperature)
 		var pressureMagnitude float64 = math.Abs(deltaP)
-		var fGuessMap map[string]float64 = make(map[string]float64) // find the darcy friction factor using an interative loop to get the major K-Factor
+		var fGuessMap map[string]float64 = make(map[string]float64) // find the darcy friction factor using an iterative loop to get the major K-Factor
 		for _, pipeName := range flowPath.JunctionIDs {
 			fGuessMap[pipeName] = 0.02
 		}
 		var pipeFrictionFactorMap map[string]float64 = make(map[string]float64)
-		_, pipeFrictionFactorMap = CalculateKPipeMapAndFrictionFactorMap(flowPath, fGuessMap, pressureMagnitude, sourceNode)
+		_, pipeFrictionFactorMap = CalculateKPipeMapAndFrictionFactorMap(flowPath, fGuessMap, pressureMagnitude, actualSourceNode)
 		for i := 0; i < 2; i += 1 { // 3 iterative recalculations for higher accuracy
-			_, pipeFrictionFactorMap = CalculateKPipeMapAndFrictionFactorMap(flowPath, pipeFrictionFactorMap, pressureMagnitude, sourceNode)
+			_, pipeFrictionFactorMap = CalculateKPipeMapAndFrictionFactorMap(flowPath, pipeFrictionFactorMap, pressureMagnitude, actualSourceNode)
 		}
-		var kMap, _ = CalculateKPipeMapAndFrictionFactorMap(flowPath, pipeFrictionFactorMap, pressureMagnitude, sourceNode)
+		var kMap, _ = CalculateKPipeMapAndFrictionFactorMap(flowPath, pipeFrictionFactorMap, pressureMagnitude, actualSourceNode)
 		var totalFinalK float64 = 0.0
 		var firstIteration bool = true
 		var firstPipe FluidPipe
@@ -223,24 +237,117 @@ func SimulateFlow() {
 				totalFinalK += kMap[pipeId]
 				firstPipe = FluidPipes[pipeId]
 				firstIteration = false
-				fmt.Println("first " + pipeId + " is")
-				fmt.Println(kMap[pipeId])
 				continue
 			}
 			var firstPipeA float64 = math.Pi * math.Pow((firstPipe.PipeDiameter/1000)/2, 2) // cross-sectional area of first and current pipe
 			var currentPipeA float64 = math.Pi * math.Pow((FluidPipes[pipeId].PipeDiameter/1000)/2, 2)
 			var normalizedK float64 = kMap[pipeId] * math.Pow(firstPipeA/currentPipeA, 2)
 			totalFinalK += normalizedK
-			fmt.Println(pipeId + " is")
-			fmt.Println(kMap[pipeId])
 		}
-		fmt.Println(totalFinalK)
+		var finalReferenceVelocity float64 = math.Sqrt(2 * pressureMagnitude / (totalFinalK * sourceNodeDensity))
+		var finalQ float64 = finalReferenceVelocity * math.Pi * math.Pow((firstPipe.PipeDiameter/1000)/2, 2) // v_ref * A_ref
+		var finalMassFlowRate float64 = finalQ * sourceNodeDensity                                           // ṁFinal = finalQ * sourceNodeDensity,  kg/s
+		var potentialMassToMove float64 = finalMassFlowRate * deltaTimeSeconds                               // apply deltaTime
+		var sourceLimit float64 = actualSourceNode.Mass                                                      // can't leave more mass than there is in the source
+		var emptySpaceInDestinationNode float64 = actualDestinationNode.MaxVolume - actualDestinationNode.Volume
+		var destinationLimit float64 = emptySpaceInDestinationNode * sourceNodeDensity // can't pump more than maxvolume to target
+		var massToMove float64 = min(potentialMassToMove, sourceLimit, destinationLimit)
+		var energyToMove float64 = massToMove * actualSourceNode.Enthalpy
+
+		// Update destination node
+		if actualDestinationNode.NodeType == "ConstantPressure" {
+			var newMass float64 = actualDestinationNode.Mass + massToMove
+			var newTotalEnergy float64 = actualDestinationNode.Mass*actualDestinationNode.Enthalpy + energyToMove
+			var newEnthalpy float64 = newTotalEnergy / newMass
+
+			// This node remains under constant pressure, so we will not be changing it.
+			actualDestinationNode.Mass = newMass
+			actualDestinationNode.Enthalpy = newEnthalpy
+			actualDestinationNode.Temperature = CalculateTemperaturePh(actualDestinationNode.Pressure/1000000, newEnthalpy/1000)
+			actualDestinationNode.Volume = newMass / CalculateDensityPt(actualDestinationNode.Pressure/1000000, actualDestinationNode.Temperature)
+		} else {
+			var newMass float64 = actualDestinationNode.Mass + massToMove
+			var newTotalEnergy float64 = actualDestinationNode.Mass*actualDestinationNode.Enthalpy + energyToMove
+			var newEnthalpy float64 = newTotalEnergy / newMass
+
+			// Check if adding the volume would overfill this node. If so, raise pressure.
+			var testVolume = newMass / CalculateDensityPh(actualDestinationNode.Pressure/1000000, newEnthalpy/1000)
+			if testVolume > actualDestinationNode.MaxVolume {
+				var specificVolume float64 = actualDestinationNode.MaxVolume / newMass
+
+				// Binary search to find pressure from volume and enthalpy
+				var pLow float64 = 0.1   // MPa
+				var pHigh float64 = 25.0 // MPa
+				var pGuess float64 = 0.0
+
+				for i := 0; i < 20; i++ {
+					pGuess = (pLow + pHigh) / 2
+					var vCalculated = CalculateSpecificVolumePh(pGuess, newEnthalpy/1000)
+					if vCalculated > specificVolume {
+						pLow = pGuess // need higher P
+					} else {
+						pHigh = pGuess // need lower P
+					}
+				}
+
+				actualDestinationNode.Mass = newMass
+				actualDestinationNode.Enthalpy = newEnthalpy
+				actualDestinationNode.Pressure = pGuess * 1000000
+				actualDestinationNode.Temperature = CalculateTemperaturePh(actualDestinationNode.Pressure/1000000, actualDestinationNode.Enthalpy/1000)
+				actualDestinationNode.Volume = actualDestinationNode.MaxVolume
+			} else {
+				// Not full, no pressure change needed.
+				actualDestinationNode.Mass = newMass
+				actualDestinationNode.Enthalpy = newEnthalpy
+				actualDestinationNode.Temperature = CalculateTemperaturePh(actualDestinationNode.Pressure/1000000, actualDestinationNode.Enthalpy/1000)
+				actualDestinationNode.Volume = testVolume
+			}
+		}
+
+		// Update source node
+		actualSourceNode.Mass -= massToMove
+		if actualSourceNode.NodeType == "ConstantPressure" {
+			// Everything except volume stays the same
+			actualSourceNode.Volume = actualSourceNode.Mass / CalculateDensityPt(actualSourceNode.Pressure/1000000, actualSourceNode.Temperature)
+		} else {
+			var specificVolume float64 = actualSourceNode.Volume / actualSourceNode.Mass
+
+			// Binary search to find pressure from volume and enthalpy
+			var pLow float64 = actualSourceNode.Pressure / 1000000 * 0.5  // MPa
+			var pHigh float64 = actualSourceNode.Pressure / 1000000 * 1.5 // MPa
+			var pGuess float64 = 0.0
+
+			for i := 0; i < 20; i++ {
+				pGuess = (pLow + pHigh) / 2
+				var vCalculated = CalculateSpecificVolumePh(pGuess, actualSourceNode.Enthalpy/1000)
+
+				if pLow < 0.05 {
+					pLow = 0.05
+				}
+
+				if pHigh > 10 {
+					pHigh = 10
+				}
+
+				if vCalculated > specificVolume {
+					pLow = pGuess // need higher P
+				} else {
+					pHigh = pGuess // need lower P
+				}
+			}
+
+			actualSourceNode.Pressure = pGuess * 1000000
+			actualSourceNode.Temperature = CalculateTemperaturePh(pGuess, actualSourceNode.Enthalpy/1000)
+		}
+
+		FluidNodes[actualSourceNodeId] = actualSourceNode
+		FluidNodes[actualDestinationNodeId] = actualDestinationNode
 	}
 }
 
 func GetReactorWaterLevel() float64 {
 	var RPVNode FluidNode = FluidNodes["ReactorVessel"]
-	var density float64 = CalculateDensity(RPVNode.Temperature, RPVNode.Pressure)
+	var density float64 = CalculateDensityPt(RPVNode.Pressure/1000000, RPVNode.Temperature)
 	var currentWaterVolume float64 = RPVNode.Mass / density
 	return (currentWaterVolume / RPVNode.MaxVolume) * float64(RPVHeight)
 }
