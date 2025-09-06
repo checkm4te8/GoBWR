@@ -42,7 +42,7 @@ const RPVHeight float32 = 21.3 // In meters, how high the water can fill in the 
 // --- VARIABLE DECLARATIONS ---
 var FluidNodes map[string]FluidNode = map[string]FluidNode{
 	"Hotwell": FluidNode{
-		20, 101325, 10000, 0, 0, 11000, // Enthalpy is calculated by IAPWS IF97 upon initialization. Mass is calculated upon initialization as well.
+		20, 101325, 500, 0, 0, 11000, // Enthalpy is calculated by IAPWS IF97 upon initialization. Mass is calculated upon initialization as well.
 	},
 	"ReactorVessel": FluidNode{
 		35, 230000, 623, 0, 0, 928,
@@ -204,13 +204,17 @@ func SimulateFlow(deltaTime time.Duration) {
 		var sourceNode FluidNode = FluidNodes[flowPath.SourceNodeID]
 		var destinationNode FluidNode = FluidNodes[flowPath.DestinationNodeID]
 		var actualSourceNode FluidNode = sourceNode
+		var actualSourceNodeId string = flowPath.SourceNodeID
 		var actualDestinationNode FluidNode = destinationNode
+		var actualDestinationNodeId string = flowPath.DestinationNodeID
 		var deltaP float64 = sourceNode.Pressure - destinationNode.Pressure // positive means flow from source to destination, 0 means no flow, negative means flow from destination to source
 		if deltaP == 0 {
 			continue // skip this path, pressure is equalized, no flow
 		} else if deltaP < 0.0 {
 			actualSourceNode = destinationNode
+			actualSourceNodeId = flowPath.DestinationNodeID
 			actualDestinationNode = sourceNode
+			actualDestinationNodeId = flowPath.SourceNodeID
 		}
 		var sourceNodeDensity float64 = CalculateDensityPt(actualSourceNode.Pressure/1000000, actualSourceNode.Temperature)
 		var pressureMagnitude float64 = math.Abs(deltaP)
@@ -247,17 +251,33 @@ func SimulateFlow(deltaTime time.Duration) {
 		var emptySpaceInDestinationNode float64 = actualDestinationNode.MaxVolume - actualDestinationNode.Volume
 		var destinationLimit float64 = emptySpaceInDestinationNode * sourceNodeDensity // can't pump more than maxvolume to target
 		var massToMove float64 = min(potentialMassToMove, sourceLimit, destinationLimit)
-		if deltaP > 0 {
-			sourceNode.Mass -= massToMove
-			destinationNode.Mass += massToMove
-		} else {
-			sourceNode.Mass += massToMove
-			destinationNode.Mass -= massToMove
+		var energyToMove float64 = massToMove * actualSourceNode.Enthalpy // J
+
+		var sourceEnergyBefore float64 = actualSourceNode.Mass * actualSourceNode.Enthalpy
+		var destEnergyBefore float64 = actualDestinationNode.Mass * actualDestinationNode.Enthalpy
+
+		// Update masses
+		actualSourceNode.Mass -= massToMove
+		actualDestinationNode.Mass += massToMove
+
+		// Calculate total energies after mass transfer
+		var sourceEnergyAfter float64 = sourceEnergyBefore - energyToMove
+		var destEnergyAfter float64 = destEnergyBefore + energyToMove
+
+		// Calculate new specific enthalpies
+		if actualSourceNode.Mass > 0.001 { // avoid division by zero for empty nodes
+			actualSourceNode.Enthalpy = sourceEnergyAfter / actualSourceNode.Mass
 		}
-		sourceNode.Volume = sourceNode.Mass / CalculateDensityPt(sourceNode.Pressure/1000000, sourceNode.Temperature)
-		destinationNode.Volume = destinationNode.Mass / CalculateDensityPt(sourceNode.Pressure/1000000, sourceNode.Temperature)
-		FluidNodes[flowPath.SourceNodeID] = sourceNode
-		FluidNodes[flowPath.DestinationNodeID] = destinationNode
+
+		if actualDestinationNode.Mass > 0.001 {
+			actualDestinationNode.Enthalpy = destEnergyAfter / actualDestinationNode.Mass
+		}
+
+		actualSourceNode.Volume = actualSourceNode.Mass / CalculateDensityPt(actualSourceNode.Pressure/1000000, actualSourceNode.Temperature)
+		actualDestinationNode.Volume = actualDestinationNode.Mass / CalculateDensityPt(actualDestinationNode.Pressure/1000000, actualDestinationNode.Temperature)
+
+		FluidNodes[actualSourceNodeId] = actualSourceNode
+		FluidNodes[actualDestinationNodeId] = actualDestinationNode
 	}
 }
 
