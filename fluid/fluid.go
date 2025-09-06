@@ -14,7 +14,6 @@ type FluidNode struct {
 	Mass        float64 // total mass of the fluid in kg
 	Enthalpy    float64 // J/kg
 	MaxVolume   float64 // max volume in cubic metres. Fluid will not flow into the node if it is full.
-	NodeType    string  // ConstantPressure or RigidVessel
 }
 
 type FluidJunctionBase struct {
@@ -43,10 +42,10 @@ const RPVHeight float32 = 21.3 // In meters, how high the water can fill in the 
 // --- VARIABLE DECLARATIONS ---
 var FluidNodes map[string]FluidNode = map[string]FluidNode{
 	"Hotwell": FluidNode{
-		20, 101325, 10000, 0, 0, 11000, "ConstantPressure", // Enthalpy is calculated by IAPWS IF97 upon initialization. Mass is calculated upon initialization as well.
+		20, 101325, 10000, 0, 0, 11000, // Enthalpy is calculated by IAPWS IF97 upon initialization. Mass is calculated upon initialization as well.
 	},
 	"ReactorVessel": FluidNode{
-		35, 230000, 623, 0, 0, 928, "RigidVessel",
+		35, 230000, 623, 0, 0, 928,
 	},
 }
 
@@ -205,17 +204,13 @@ func SimulateFlow(deltaTime time.Duration) {
 		var sourceNode FluidNode = FluidNodes[flowPath.SourceNodeID]
 		var destinationNode FluidNode = FluidNodes[flowPath.DestinationNodeID]
 		var actualSourceNode FluidNode = sourceNode
-		var actualSourceNodeId string = flowPath.SourceNodeID
 		var actualDestinationNode FluidNode = destinationNode
-		var actualDestinationNodeId string = flowPath.DestinationNodeID
 		var deltaP float64 = sourceNode.Pressure - destinationNode.Pressure // positive means flow from source to destination, 0 means no flow, negative means flow from destination to source
 		if deltaP == 0 {
 			continue // skip this path, pressure is equalized, no flow
 		} else if deltaP < 0.0 {
 			actualSourceNode = destinationNode
-			actualSourceNodeId = flowPath.DestinationNodeID
 			actualDestinationNode = sourceNode
-			actualDestinationNodeId = flowPath.SourceNodeID
 		}
 		var sourceNodeDensity float64 = CalculateDensityPt(actualSourceNode.Pressure/1000000, actualSourceNode.Temperature)
 		var pressureMagnitude float64 = math.Abs(deltaP)
@@ -252,96 +247,17 @@ func SimulateFlow(deltaTime time.Duration) {
 		var emptySpaceInDestinationNode float64 = actualDestinationNode.MaxVolume - actualDestinationNode.Volume
 		var destinationLimit float64 = emptySpaceInDestinationNode * sourceNodeDensity // can't pump more than maxvolume to target
 		var massToMove float64 = min(potentialMassToMove, sourceLimit, destinationLimit)
-		var energyToMove float64 = massToMove * actualSourceNode.Enthalpy
-
-		// Update destination node
-		if actualDestinationNode.NodeType == "ConstantPressure" {
-			var newMass float64 = actualDestinationNode.Mass + massToMove
-			var newTotalEnergy float64 = actualDestinationNode.Mass*actualDestinationNode.Enthalpy + energyToMove
-			var newEnthalpy float64 = newTotalEnergy / newMass
-
-			// This node remains under constant pressure, so we will not be changing it.
-			actualDestinationNode.Mass = newMass
-			actualDestinationNode.Enthalpy = newEnthalpy
-			actualDestinationNode.Temperature = CalculateTemperaturePh(actualDestinationNode.Pressure/1000000, newEnthalpy/1000)
-			actualDestinationNode.Volume = newMass / CalculateDensityPt(actualDestinationNode.Pressure/1000000, actualDestinationNode.Temperature)
+		if deltaP > 0 {
+			sourceNode.Mass -= massToMove
+			destinationNode.Mass += massToMove
 		} else {
-			var newMass float64 = actualDestinationNode.Mass + massToMove
-			var newTotalEnergy float64 = actualDestinationNode.Mass*actualDestinationNode.Enthalpy + energyToMove
-			var newEnthalpy float64 = newTotalEnergy / newMass
-
-			// Check if adding the volume would overfill this node. If so, raise pressure.
-			var testVolume = newMass / CalculateDensityPh(actualDestinationNode.Pressure/1000000, newEnthalpy/1000)
-			if testVolume > actualDestinationNode.MaxVolume {
-				var specificVolume float64 = actualDestinationNode.MaxVolume / newMass
-
-				// Binary search to find pressure from volume and enthalpy
-				var pLow float64 = 0.1   // MPa
-				var pHigh float64 = 25.0 // MPa
-				var pGuess float64 = 0.0
-
-				for i := 0; i < 20; i++ {
-					pGuess = (pLow + pHigh) / 2
-					var vCalculated = CalculateSpecificVolumePh(pGuess, newEnthalpy/1000)
-					if vCalculated > specificVolume {
-						pLow = pGuess // need higher P
-					} else {
-						pHigh = pGuess // need lower P
-					}
-				}
-
-				actualDestinationNode.Mass = newMass
-				actualDestinationNode.Enthalpy = newEnthalpy
-				actualDestinationNode.Pressure = pGuess * 1000000
-				actualDestinationNode.Temperature = CalculateTemperaturePh(actualDestinationNode.Pressure/1000000, actualDestinationNode.Enthalpy/1000)
-				actualDestinationNode.Volume = actualDestinationNode.MaxVolume
-			} else {
-				// Not full, no pressure change needed.
-				actualDestinationNode.Mass = newMass
-				actualDestinationNode.Enthalpy = newEnthalpy
-				actualDestinationNode.Temperature = CalculateTemperaturePh(actualDestinationNode.Pressure/1000000, actualDestinationNode.Enthalpy/1000)
-				actualDestinationNode.Volume = testVolume
-			}
+			sourceNode.Mass += massToMove
+			destinationNode.Mass -= massToMove
 		}
-
-		// Update source node
-		actualSourceNode.Mass -= massToMove
-		if actualSourceNode.NodeType == "ConstantPressure" {
-			// Everything except volume stays the same
-			actualSourceNode.Volume = actualSourceNode.Mass / CalculateDensityPt(actualSourceNode.Pressure/1000000, actualSourceNode.Temperature)
-		} else {
-			var specificVolume float64 = actualSourceNode.Volume / actualSourceNode.Mass
-
-			// Binary search to find pressure from volume and enthalpy
-			var pLow float64 = actualSourceNode.Pressure / 1000000 * 0.5  // MPa
-			var pHigh float64 = actualSourceNode.Pressure / 1000000 * 1.5 // MPa
-			var pGuess float64 = 0.0
-
-			for i := 0; i < 20; i++ {
-				pGuess = (pLow + pHigh) / 2
-				var vCalculated = CalculateSpecificVolumePh(pGuess, actualSourceNode.Enthalpy/1000)
-
-				if pLow < 0.05 {
-					pLow = 0.05
-				}
-
-				if pHigh > 10 {
-					pHigh = 10
-				}
-
-				if vCalculated > specificVolume {
-					pLow = pGuess // need higher P
-				} else {
-					pHigh = pGuess // need lower P
-				}
-			}
-
-			actualSourceNode.Pressure = pGuess * 1000000
-			actualSourceNode.Temperature = CalculateTemperaturePh(pGuess, actualSourceNode.Enthalpy/1000)
-		}
-
-		FluidNodes[actualSourceNodeId] = actualSourceNode
-		FluidNodes[actualDestinationNodeId] = actualDestinationNode
+		sourceNode.Volume = sourceNode.Mass / CalculateDensityPt(sourceNode.Pressure/1000000, sourceNode.Temperature)
+		destinationNode.Volume = destinationNode.Mass / CalculateDensityPt(sourceNode.Pressure/1000000, sourceNode.Temperature)
+		FluidNodes[flowPath.SourceNodeID] = sourceNode
+		FluidNodes[flowPath.DestinationNodeID] = destinationNode
 	}
 }
 
