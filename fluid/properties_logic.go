@@ -2,12 +2,23 @@ package fluid
 
 // Property codes from SEUIF97
 const (
+	PRESSURE          = 0
 	TEMPERATURE       = 1
 	SPECIFIC_VOLUME   = 3
 	ENTHALPY          = 4
 	ENTROPY           = 5
 	DYNAMIC_VISCOSITY = 24
 )
+
+func CalculatePressureHs(EnthalpyKJKG float64, EntropyKJ float64) (Pressure float64) {
+	var pressure float64 = cgoHs(EnthalpyKJKG, EntropyKJ, PRESSURE) // MPa
+	return pressure
+}
+
+func CalculateTemperatureHs(EnthalpyKJKG float64, EntropyKJ float64) (Temperature float64) {
+	var temperature float64 = cgoHs(EnthalpyKJKG, EntropyKJ, TEMPERATURE) // Celsius
+	return temperature
+}
 
 func CalculateTemperaturePh(PressureMPa float64, EnthalpyKJKG float64) float64 {
 	var temperature float64 = cgoPh(PressureMPa, EnthalpyKJKG, TEMPERATURE) // Celsius

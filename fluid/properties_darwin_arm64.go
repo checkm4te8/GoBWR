@@ -23,3 +23,8 @@ func cgoPh(pressure float64, enthalpy float64, propertyID int) float64 {
 func cgoPs(pressure float64, entropy float64, propertyID int) float64 {
 	return float64(C.ps(C.double(pressure), C.double(entropy), C.int(propertyID)))
 }
+
+// cgoHs is the macOS-specific wrapper that calls the C.ph function.
+func cgoHs(enthalpy float64, entropy float64, propertyID int) float64 {
+	return float64(C.hs(C.double(enthalpy), C.double(entropy), C.int(propertyID)))
+}
